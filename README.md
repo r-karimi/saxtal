@@ -7,6 +7,8 @@ conda env create -f environment.yml
 
 TODO list:
 
+0. Implement rule to only mask 2x1 or 1x2 clusters of pixels or larger
+
 1. Test applying masking to individual frames from patch average, then going to per-particle alignment
 
 2. Restructure program to take command line arguments
@@ -14,4 +16,4 @@ TODO list:
 3. Implement pyFFTW as a flag, test overall script execution time
 
 Minor:
-- Write function to plot indices of detected spots
+- Write helper function to plot indices of detected spots
