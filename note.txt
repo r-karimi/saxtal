@@ -1,0 +1,3 @@
+NOTE: In order to install the env on another computer, run:
+
+conda env create -f environment.yml
