@@ -12,3 +12,6 @@ TODO list:
 2. Restructure program to take command line arguments
 
 3. Implement pyFFTW as a flag, test overall script execution time
+
+Minor:
+- Use `s` argument of scipy FFT to automatically pad images.
