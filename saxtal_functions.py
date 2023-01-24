@@ -3,6 +3,7 @@
 from funcs_mrcio import iwrhdr_opened, irdhdr_opened, iwrsec_opened, irdsec_opened
 from skimage.filters import gaussian
 from skimage.exposure import rescale_intensity
+from tqdm import tqdm
 
 import numpy as np
 import scipy.fft as sfft
@@ -195,7 +196,22 @@ def plot_diffraction_spots(diffraction_spots):
     Helper function to plot relative locations of diffraction spots to
     evaluate how well the reciprocal lattice was found.
     """
-    
+  
+def remove_hotpixels(diffraction_spots):
+    """
+    Removes isolated "hot" pixels that exceed amplitude threshold but
+    have no immediate neighbours, so are likely not part of the
+    reciprocal lattice.
+    """
+    filter_list = []
+    for ex_spot in tqdm(diffraction_spots):
+        y_neighbours = np.sum((diffraction_spots == (ex_spot[0]+1, ex_spot[1])).all(axis=1)) + np.sum((diffraction_spots == (ex_spot[0]-1, ex_spot[1])).all(axis=1))
+        x_neighbours = np.sum((diffraction_spots == (ex_spot[0], ex_spot[1]+1)).all(axis=1)) + np.sum((diffraction_spots == (ex_spot[0]-1, ex_spot[1]-1)).all(axis=1))
+        if x_neighbours >= 1 and y_neighbours >= 1:
+            filter_list.append(True)
+        else: 
+            filter_list.append(False)
+    return(filter_list)
 
 def replace_diffraction_spots(padded_fft, diffraction_spots, replace_distance_percent = 0.05):
     """
@@ -305,6 +321,7 @@ def mask_image(filename,
                num_sd=3.0,
                x_window_percent=(0, 1),
                y_window_percent=(0, 1),
+               mask_hotpixels = True,
                replace_distance_percent=0.05):
     """
     Take the filename of a micrograph in the .mrc format and subtract the streptavidin crystal lattice.
@@ -336,9 +353,17 @@ def mask_image(filename,
         print("No thresholding method specificed. Please specify a method using the threshold_method parameter.")
         return
 
-    if verbose:
-        print("Number of diffraction spots found: " + str(diffraction_spots.shape[0]))
+    num_spots = diffraction_spots.shape[0]
     
+    if verbose:
+        print("Number of diffraction spots found: " + str(num_spots))
+    
+    # Filter out the hot pixels
+    if mask_hotpixels:
+        print("Removing hot pixels...")
+        diffraction_spots = diffraction_spots[remove_hotpixels(diffraction_spots)]
+        print(str(num_spots - diffraction_spots.shape[0]) + " hot pixels removed.")
+              
     # Replace the diffraction spots
     masked_fft = replace_diffraction_spots(padded_fft, diffraction_spots, replace_distance_percent)
     
