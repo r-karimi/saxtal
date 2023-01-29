@@ -1,5 +1,12 @@
 import numpy as n
-#from normalizations import remove_hotpixels
+
+# i = image
+# rd = read
+# wr = write
+# sec = section (z slice)
+# pas = part of a section (part pf a z slice)
+# lin = line
+# hdr = header
 
 def iwrsec_opened(data,filename):
     """ Image Write Section (opened) - write a section of a stack to an MRC file that is already opened """

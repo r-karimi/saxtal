@@ -13,20 +13,6 @@ import pyfftw
 import multiprocessing
 import os
 
-def import_mrc(filename):
-    """Use funcs_mrcio to open a specified .mrc file"""
-    # Read the .mrc file in binary
-    micrograph = open(filename,'rb')
-    
-    # Use funcs_mrcio to extract image array and rescale values to lie between [-1, 1]
-    image = rescale_intensity(irdsec_opened(micrograph,0))
-    
-    # Use funcs_mrcio to extract header info
-    header = irdhdr_opened(micrograph)
-    
-    # Return the rescaled image and header
-    return image, header
-
 def rebin_helper(array, bin_size=2):
     """Take a two dimensional pixel array and average each bin_size x bin_size square to one pixel."""
     shape = (array.shape[0] // bin_size, bin_size,
@@ -67,24 +53,39 @@ def rebin_mrc(filename, bin_size=2):
     
     # Write the rebinned array to the new file
     iwrsec_opened(rebinned_image, rebinned_mrc)
+
+def import_mrc(filename):
+    """Use funcs_mrcio to open a specified .mrc file"""
+    # Read the .mrc file in binary
+    micrograph = open(filename,'rb')
     
-def pad_image(image, header):
-    """Take image and header from import_mrc() and pad image to make array square"""
-    # Find the maximum dimension of the image
-    max_dimension = np.maximum(header['nx'], header['ny'])
+    # Use funcs_mrcio to extract image array and rescale values to lie between [-1, 1]
+    image = rescale_intensity(irdsec_opened(micrograph,0))
     
-    # Make an array of the median pixel value of the image array with maximum dimensions
-    padded_image = np.full(shape=(max_dimension, max_dimension),
-                           fill_value=np.median(image))
+    # Use funcs_mrcio to extract header info
+    header = irdhdr_opened(micrograph)
     
-    # Transplant image values into padded array
-    padded_image[0:header['nx'],0:header['ny']] = image
+    # Return the rescaled image and header
+    return image, header
+
     
-    # Return padded image and header
-    return padded_image, header
+# def pad_image(image, header):
+#     """Take image and header from import_mrc() and pad image to make array square"""
+#     # Find the maximum dimension of the image
+#     max_dimension = np.maximum(header['nx'], header['ny'])
+#     
+#     # Make an array of the median pixel value of the image array with maximum dimensions
+#     padded_image = np.full(shape=(max_dimension, max_dimension),
+#                            fill_value=np.median(image))
+#     
+#     # Transplant image values into padded array
+#     padded_image[0:header['nx'],0:header['ny']] = image
+#     
+#     # Return padded image and header
+#     return padded_image, header
 
 def scipy_fft(image, verbose=False, threads=1):
-    """Take padded image from pad_image() and return the FFT"""
+    """Take  image from import_mrc() and return the FFT"""
     
     # Record the time it takes to do the FFT
     # for later comparison with multi-threaded FFTW
@@ -127,11 +128,11 @@ def generate_diff_spectrum(padded_fft, sigma=1):
     smoothed_spectrum = gaussian(padded_spectrum, sigma)
     
     # Return the difference spectrum
-    diff_spectrum = padded_spectrum - smoothed_spectrum
+    log_diff_spectrum = np.log(padded_spectrum/smoothed_spectrum)
     
-    return diff_spectrum, smoothed_spectrum
+    return log_diff_spectrum, smoothed_spectrum
 
-def find_diffraction_spots_quantile(diff_spectrum, quantile=0.99, x_window_percent = (0, 1), y_window_percent = (0, 1)):
+def find_diffraction_spots_quantile(log_diff_spectrum, quantile=0.99, x_window_percent = (0, 1), y_window_percent = (0, 1)):
     """
     Take a difference spectrum and find outliers greater than a given quantile,
     taking a user-defined window of the FFT.
@@ -139,17 +140,17 @@ def find_diffraction_spots_quantile(diff_spectrum, quantile=0.99, x_window_perce
     
     # Define minimum and maximum indices of the window
     
-    y_min = int(diff_spectrum.shape[0]*y_window_percent[0])
-    y_max = int(diff_spectrum.shape[0]*y_window_percent[1])
-    x_min = int(diff_spectrum.shape[1]*x_window_percent[0])
-    x_max = int(diff_spectrum.shape[1]*x_window_percent[1])
+    y_min = int(log_diff_spectrum.shape[0]*y_window_percent[0])
+    y_max = int(log_diff_spectrum.shape[0]*y_window_percent[1])
+    x_min = int(log_diff_spectrum.shape[1]*x_window_percent[0])
+    x_max = int(log_diff_spectrum.shape[1]*x_window_percent[1])
 
     # Calculate the threshold on a subset of the spectrum
-    quantile_threshold = np.quantile(diff_spectrum[y_min:y_max, x_min:x_max].flatten(), 
+    quantile_threshold = np.quantile(log_diff_spectrum[y_min:y_max, x_min:x_max].flatten(), 
                                      quantile)
     
     # Find the indices of points where the value is greater than the threshold
-    diffraction_spots = np.transpose(np.where(diff_spectrum >= quantile_threshold))
+    diffraction_spots = np.transpose(np.where(log_diff_spectrum >= quantile_threshold))
     
     # Discard the points that fall outside the window
     diffraction_spots_yfilt = np.logical_and(diffraction_spots[:,0] >= y_min, diffraction_spots[:,0] <= y_max)
@@ -161,25 +162,25 @@ def find_diffraction_spots_quantile(diff_spectrum, quantile=0.99, x_window_perce
 
     return diffraction_spots
 
-def find_diffraction_spots_sd(diff_spectrum, num_sd=3.0, x_window_percent=(0, 1), y_window_percent=(0, 1)):
+def find_diffraction_spots_sd(log_diff_spectrum, num_sd=3.0, x_window_percent=(0, 1), y_window_percent=(0, 1)):
     """
     Take a difference spectrum and find outliers past a certain number of SDs from the mean,
     taking a user-defined window of the FFT.
     """
     
     # Define minimum and maximum indices of the window
-    y_min = int(diff_spectrum.shape[0]*y_window_percent[0])
-    y_max = int(diff_spectrum.shape[0]*y_window_percent[1])
-    x_min = int(diff_spectrum.shape[1]*x_window_percent[0])
-    x_max = int(diff_spectrum.shape[1]*x_window_percent[1])
+    y_min = int(log_diff_spectrum.shape[0]*y_window_percent[0])
+    y_max = int(log_diff_spectrum.shape[0]*y_window_percent[1])
+    x_min = int(log_diff_spectrum.shape[1]*x_window_percent[0])
+    x_max = int(log_diff_spectrum.shape[1]*x_window_percent[1])
 
-    # Calculate the mean on a subset of the spectrum
-    mean = np.mean(diff_spectrum[y_min:y_max, x_min:x_max].flatten())
+    # Calculate the mean on a  subset of the spectrum
+    mean = np.mean(log_diff_spectrum[y_min:y_max, x_min:x_max]).flatten()
     # Calculate the standard deviation
-    sd = np.std(diff_spectrum[y_min:y_max, x_min:x_max].flatten())
-    
+    sd = np.std(log_diff_spectrum[y_min:y_max, x_min:x_max]).flatten()
+   
     # Find the indices of points where the value is greater than the threshold
-    diffraction_spots = np.transpose(np.where(diff_spectrum >= mean+(num_sd*sd)))
+    diffraction_spots = np.transpose(np.where(log_diff_spectrum >= mean+(num_sd*sd)))
     
     # Discard the points that fall outside the window
     diffraction_spots_yfilt = np.logical_and(diffraction_spots[:,0] >= y_min, diffraction_spots[:,0] <= y_max)
@@ -191,29 +192,26 @@ def find_diffraction_spots_sd(diff_spectrum, num_sd=3.0, x_window_percent=(0, 1)
 
     return diffraction_spots
 
-def plot_diffraction_spots(diffraction_spots):
-    """
-    Helper function to plot relative locations of diffraction spots to
-    evaluate how well the reciprocal lattice was found.
-    """
-  
-def remove_hotpixels(diffraction_spots):
+
+def remove_hotpixels(diffraction_spots, verbose=False):
     """
     Removes isolated "hot" pixels that exceed amplitude threshold but
     have no immediate neighbours, so are likely not part of the
     reciprocal lattice.
     """
     filter_list = []
-    for ex_spot in tqdm(diffraction_spots):
+    for ex_spot in tqdm(diffraction_spots, disable=not verbose):
         y_neighbours = np.sum((diffraction_spots == (ex_spot[0]+1, ex_spot[1])).all(axis=1)) + np.sum((diffraction_spots == (ex_spot[0]-1, ex_spot[1])).all(axis=1))
         x_neighbours = np.sum((diffraction_spots == (ex_spot[0], ex_spot[1]+1)).all(axis=1)) + np.sum((diffraction_spots == (ex_spot[0]-1, ex_spot[1]-1)).all(axis=1))
-        if x_neighbours >= 1 and y_neighbours >= 1:
+        if x_neighbours >= 1 or y_neighbours >= 1:
             filter_list.append(True)
         else: 
             filter_list.append(False)
-    return(filter_list)
+    return filter_list
 
-def replace_diffraction_spots(padded_fft, diffraction_spots, replace_distance_percent = 0.05):
+
+
+def replace_diffraction_spots(padded_fft, diffraction_spots, replace_distance_percent=0.05):
     """
     Take FFT from scipy_fft() or west_fft() and replace diffraction spots according to indices from find_diffraction_spots.
     replace_distance_percent: fraction of x-dimension to move along the diagonal when finding new amplitude.
@@ -273,7 +271,7 @@ def scipy_inverse_fft(masked_fft, verbose=False, threads=1):
         # Print the elapsed time to the nearest hundreth of a millisecond
         print("scipy_ifft(): iFFT performed in", np.round((end_time-start_time)*1000, 2), "milliseconds.")
     
-    # Return FFT of padded image
+    # Return padded masked image
     return padded_masked_image
 
 def unpad_image(padded_masked_image, original_shape):
@@ -283,7 +281,7 @@ def unpad_image(padded_masked_image, original_shape):
     """
     return padded_masked_image[0:original_shape[0], 0:original_shape[1]]
 
-def export_masked_mrc(masked_image, filename):
+def export_masked_mrc(masked_image, filename, verbose=False):
     """Take unpadded masked image from unpad_image() and write out a new header"""
     
     # Generate a new filename
@@ -307,10 +305,10 @@ def export_masked_mrc(masked_image, filename):
                   dmean, 
                   mode=2)
     
-    # Write the rebinned array to the new file
+    # Write the masked image array to the new file
     iwrsec_opened(masked_image, masked_mrc)
     
-    print("Export complete!")
+    if verbose: print("Export complete!")
     
 def mask_image(filename, 
                threshold_method,
@@ -322,7 +320,8 @@ def mask_image(filename,
                x_window_percent=(0, 1),
                y_window_percent=(0, 1),
                mask_hotpixels = True,
-               replace_distance_percent=0.05):
+               replace_distance_percent=0.05,
+               return_spots=False):
     """
     Take the filename of a micrograph in the .mrc format and subtract the streptavidin crystal lattice.
     print_timestamps: Boolean, whether to print how long it takes to perform the FFT and iFFT.
@@ -350,7 +349,7 @@ def mask_image(filename,
     if threshold_method == "sd":
         diffraction_spots = find_diffraction_spots_sd(diff_spectrum, num_sd, x_window_percent, y_window_percent)
     else:
-        print("No thresholding method specificed. Please specify a method using the threshold_method parameter.")
+        print("No thresholding method specified. Please specify a method using the threshold_method parameter.")
         return
 
     num_spots = diffraction_spots.shape[0]
@@ -360,10 +359,25 @@ def mask_image(filename,
     
     # Filter out the hot pixels
     if mask_hotpixels:
-        print("Removing hot pixels...")
-        diffraction_spots = diffraction_spots[remove_hotpixels(diffraction_spots)]
-        print(str(num_spots - diffraction_spots.shape[0]) + " hot pixels removed.")
-              
+        if verbose: print("Removing hot pixels...")
+        diffraction_spots = diffraction_spots[remove_hotpixels(diffraction_spots, verbose)]
+        if verbose: print(str(num_spots - diffraction_spots.shape[0]) + " hot pixels removed.")
+    
+    if verbose:
+        plt.figure()
+        plt.scatter(y = -diffraction_spots[:,0], x = diffraction_spots[:,1], s = 1)
+        plt.xlim((0, 500))
+        plt.ylim((-500, -0))
+        plt.show()
+        
+        plt.figure()
+        plt.scatter(y = -diffraction_spots[:,0], x = diffraction_spots[:,1], s = 1)
+        plt.show()
+    
+    # Return the indices of diffraction spots if return_spots is true
+    if return_spots:
+        return diffraction_spots
+    
     # Replace the diffraction spots
     masked_fft = replace_diffraction_spots(padded_fft, diffraction_spots, replace_distance_percent)
     
@@ -374,7 +388,179 @@ def mask_image(filename,
     masked_image = unpad_image(padded_masked_image, image.shape)
     
     # Export the image as an .mrc file
-    export_masked_mrc(masked_image, filename)
+    export_masked_mrc(masked_image, filename, verbose)
     
     if verbose:
         print(filename + " masked successfully!")
+
+        
+# Functions to handle movies:
+        
+        
+def import_movie(filename):
+    
+    # Open the movie
+    raw_movie = open(filename,'rb')
+    
+    # Read in the header
+    header = irdhdr_opened(raw_movie)
+    
+    # Extract info from the header
+    nx = header['nx']
+    ny = header['ny']
+    nz = header['nz']
+    mode = header['datatype']
+    
+    # Read each frame into a numpy array
+    movie = np.empty((nx, ny, nz), dtype=np.float32)
+    for z in range(nz):
+        movie[:,:,z] = rescale_intensity(irdsec_opened(raw_movie, z))
+    
+    # Return the array and the header
+    return movie, header
+
+def scipy_batch_fft(movie, verbose=False, threads=1):
+    """Take movie from import_movie() and return the FFT"""
+    
+    # Start the timer
+    start_time = time.time()
+
+    # Perform an FFT over the 0th and 1st axis of the movie
+    padded_movie_fft = sfft.rfftn(movie, 
+                                  s=(np.max(movie[:,:,0].shape), np.max(movie[:,:,0].shape)), 
+                                  axes=(0,1),
+                                  overwrite_x=True,
+                                  workers=threads)
+
+    # Stop the timer
+    end_time = time.time()
+    
+    if verbose:
+        # Print the elapsed time to the nearest hundreth of a millisecond
+        print("scipy_batch_fft(): FFT performed in", np.round((end_time-start_time)*1000, 2), "milliseconds.")
+        print("scipy_batch_fft():", np.round((end_time-start_time)*1000/movie.shape[2], 2), "milliseconds per frame.")
+    
+    # Eliminate potential artifacts along edge of FFT
+    # padded_fft[0,:,:] = padded_fft[1,:,:]
+    # padded_fft[:,0,:] = padded_fft[:,1,:]
+    
+    # Return FFT of padded movie
+    return padded_movie_fft
+
+
+def scipy_inverse_batch_fft(masked_movie_fft, verbose=False, threads=1):
+    """Take masked FFT of movie and return the padded movie array"""
+    
+    # Record the time it takes to do the FFT
+    # for later comparison with multi-threaded FFTW
+    
+    # Start the timer
+    start_time = time.time()
+
+    # Perform an FFT over the 0th and 1st axis of the movie
+    padded_masked_movie = sfft.irfftn(masked_movie_fft, 
+                                      axes=(0,1),
+                                      overwrite_x=True,
+                                      workers=threads)
+
+    # Stop the timer
+    end_time = time.time()
+    
+    if verbose:
+        # Print the elapsed time to the nearest hundreth of a millisecond
+        print("scipy_inverse_batch_fft(): iFFT performed in", np.round((end_time-start_time)*1000, 2), "milliseconds.")
+        print("scipy_inverse_batch_fft():", np.round((end_time-start_time)*1000/masked_movie_fft.shape[2], 2), "milliseconds per frame.")
+    
+    # Return padded masked movie
+    return padded_masked_movie
+
+def unpad_movie(padded_masked_movie, original_movie_shape):
+    """
+    Take padded masked movie from scipy_inverse_fft() or west_inverse_fft() 
+    and original movie shape and return unpadded image
+    """
+    return padded_masked_movie[0:original_movie_shape[0], 0:original_movie_shape[1], 0:original_movie_shape[2]]
+
+def export_masked_movie(masked_movie, movie_filename, verbose=False):
+    """
+    """
+    # Generate a new filename
+    new_movie_filename = "masked_output/" + movie_filename[0:-4] + "_masked.mrc"
+
+    # Generate a new header
+    nx, ny, nz = masked_movie.shape
+    nxyz = np.array([nx, ny, nz], dtype=np.float32)
+    dmin = np.min(masked_movie)
+    dmax = np.max(masked_movie)
+    dmean = np.sum(masked_movie)/(nx*ny*nz)
+    
+    # Open a new file
+    masked_movie_mrc = open(new_movie_filename, 'wb')
+    
+    # Write the header to the new file
+    iwrhdr_opened(masked_movie_mrc, 
+                  nxyz, 
+                  dmin, 
+                  dmax, 
+                  dmean, 
+                  mode=2)
+
+    # Write the masked movie array to the new file
+    iwrsec_opened(masked_movie, masked_movie_mrc)
+    
+    if verbose: print("Export complete!")
+
+def mask_movie(movie_filename,
+               micrograph_filename,
+               threshold_method,
+               verbose=False,
+               threads=1,
+               sigma=1,
+               quantile=0.99,
+               num_sd=3.0,
+               x_window_percent=(0, 1),
+               y_window_percent=(0, 1),
+               mask_hotpixels = True,
+               replace_distance_percent=0.05,
+               return_spots=True):
+    
+    # Import the movie
+    movie, header = import_movie(movie_filename)
+    
+    # Perform an FFT of the movie
+    padded_movie_fft = scipy_batch_fft(movie, verbose, threads)
+    
+    # Find diffraction spots by running mask_image
+    diffraction_spots = mask_image(micrograph_filename, 
+                                   threshold_method, 
+                                   verbose = verbose, 
+                                   threads = threads, 
+                                   sigma = sigma, 
+                                   num_sd = num_sd, 
+                                   x_window_percent = x_window_percent,
+                                   y_window_percent = y_window_percent,
+                                   mask_hotpixels = mask_hotpixels,
+                                   replace_distance_percent = replace_distance_percent,
+                                   return_spots = return_spots)
+
+    # Make a new array to hold masked movie
+    masked_movie_fft = np.empty(padded_movie_fft.shape, dtype=np.complex64)
+    
+    # Replace diffraction spots in each frame
+    for z in range(header['nz']):
+        frame_fft = padded_movie_fft[:,:,z]
+        masked_movie_fft[:,:,z] = replace_diffraction_spots(frame_fft, 
+                                                            diffraction_spots, 
+                                                            replace_distance_percent)
+  
+    # Perform the inverse FFT of the movie
+    padded_masked_movie = scipy_inverse_batch_fft(masked_movie_fft, verbose, threads)
+    
+    # Unpad the movie
+    masked_movie = unpad_movie(padded_masked_movie, movie.shape)
+    
+    # Export masked movie
+    export_masked_movie(masked_movie, movie_filename, verbose)
+    
+    if verbose:
+        print(movie_filename + " masked successfully!")

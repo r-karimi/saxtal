@@ -1,4 +1,6 @@
-rebin_ex100/*
-masked_output/*
-motion_correction_average/*
-rebin_2/*
+reference/rebin_ex100/*
+reference/masked_output/*
+reference/motion_correction_average/*
+pbs-apo_dataset/*
+IY_dataset/*
+test_data/*
