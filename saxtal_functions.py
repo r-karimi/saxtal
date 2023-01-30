@@ -564,3 +564,4 @@ def mask_movie(movie_filename,
     
     if verbose:
         print(movie_filename + " masked successfully!")
+        
