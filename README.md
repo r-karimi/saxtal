@@ -7,11 +7,11 @@ conda env create -f environment.yml
 
 TODO list:
 
-1. Write reciprocal lattice-finding functions
 2. Restructure program to take command line arguments
 
 
 Minor:
 - Write helper function to plot indices of detected spots
 - Implement pyFFTW use as a flag, test overall script execution time
+- Implement LSQ determination of best lattice basis, iterative refinement
 
