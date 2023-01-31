@@ -13,5 +13,3 @@ TODO list:
 Minor:
 - Write helper function to plot indices of detected spots
 - Implement pyFFTW use as a flag, test overall script execution time
-- Implement LSQ determination of best lattice basis, iterative refinement
-
