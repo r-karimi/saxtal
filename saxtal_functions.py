@@ -193,6 +193,24 @@ def find_diffraction_spots_sd(log_diff_spectrum, num_sd=3.0, x_window_percent=(0
     return diffraction_spots
 
 
+# Functions to find lattices. This makes remove_hotpixels redundant -----------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def remove_hotpixels(diffraction_spots, verbose=False):
     """
     Removes isolated "hot" pixels that exceed amplitude threshold but
@@ -392,9 +410,53 @@ def mask_image(filename,
     
     if verbose:
         print(filename + " masked successfully!")
+        
 
         
-# Functions to handle movies:
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+# Functions to handle movies -----------------------------------------------------------------------------------
         
         
 def import_movie(filename):
