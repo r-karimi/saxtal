@@ -221,11 +221,11 @@ def wrap_indices(unwrapped_indices, fft):
 
     return wrapped_indices
 
-def estimate_basis(indices, amplitudes):
+def estimate_basis(indices, amplitudes, min_lattice_size):
     
-    # Find the top eight brightest points
-    top_eight = np.flip(np.argsort(amplitudes))[0:8]
-    basis_points = indices[:,top_eight]
+    # Find the top min_lattice_size brightest points
+    top_n = np.flip(np.argsort(amplitudes))[0:min_lattice_size]
+    basis_points = indices[:,top_n]
 
     # Initialize variables
     best_error = 1e8
@@ -233,11 +233,20 @@ def estimate_basis(indices, amplitudes):
     best_miller = np.empty(indices.shape)
 
     # Loop over all pairs of putative basis vectors
-    for i in range(8):
-        for j in range((i+1), 8):
+    for i in range(min_lattice_size):
+        for j in range((i+1), min_lattice_size):
             
+
             # Establish the basis matrix
             basis_matrix = basis_points[:,(i,j)]
+        
+            # Compute the angle between the vectors
+            angle = (360/(2*np.pi))*np.arccos(np.dot(basis_matrix[:,0], basis_matrix[:,1])/
+                              (np.linalg.norm(basis_matrix[:,0])*np.linalg.norm(basis_matrix[:,1])))
+            
+            # If the basis vectors are linearly dependent, skip this iteration
+            # As the basis matrix will be non-invertable
+            if angle==0 or angle==180: continue
         
             # Take the inverse
             inverse_matrix = np.linalg.inv(basis_matrix)
@@ -288,7 +297,7 @@ def shorten_basis(best_basis, indices, verbose=False):
     while rerun_loop:
 
         # Print starting message
-        if verbose: print("Running basis refinement...")
+        if verbose: print("Running basis shortening...")
 
         # Extract the basis vectors
         basis_0 = shortened_basis[:,0]
@@ -488,9 +497,10 @@ def find_lattice(indices,
                  pixel_size,
                  show_plots=False,
                  verbose=False, 
-                 num_sd=3, 
+                 num_sd_secondpass=2, 
                  miller_index_buffer=2, 
-                 box_radius=10):
+                 box_radius=10,
+                 min_lattice_size=5):
     """
     """
     # Unwrap indices to help find lattice
@@ -499,9 +509,13 @@ def find_lattice(indices,
     if show_plots: 
         plt.scatter(y = unwrapped_indices[0,:], x = unwrapped_indices[1,:], s = np.exp(amplitudes))
         plt.show()
-        
+    
+    if unwrapped_indices.shape[1] <= min_lattice_size:
+        if verbose: print("Lattice has less than " + str(min_lattice_size) + " candidate basis vectors during first pass. Terminating function.")
+        return None, None, None
+    
     # Estmate the basis
-    best_basis, best_miller = estimate_basis(unwrapped_indices, amplitudes)
+    best_basis, best_miller = estimate_basis(unwrapped_indices, amplitudes, min_lattice_size)
     # Shorten the basis vectors
     shortened_basis, shortened_miller = shorten_basis(best_basis, unwrapped_indices, verbose)
     # Filter out points not near integer Miller indices
@@ -517,6 +531,11 @@ def find_lattice(indices,
         ax.scatter(y = unwrapped_indices[0,:], x = unwrapped_indices[1,:], s = 5*amplitudes)
         ax.scatter(y = nonredundant_lattice[0,:], x = nonredundant_lattice[1,:], s = 5)
         plt.show()
+    
+    # If the nonredundant lattice has less than 5 points, don't return a new lattice
+    if nonredundant_miller.shape[1] <= min_lattice_size:
+        if verbose: print("Lattice has less than " + str(min_lattice_size) + " points. Terminating function.")
+        return None, None, None
         
     # Refine the lattice to estimate unit cell dimensions
     refined_basis = refine_basis(shortened_basis, nonredundant_miller, verbose)
@@ -527,6 +546,19 @@ def find_lattice(indices,
     basis_1_length = np.sqrt(np.sum(refined_basis[:,1]**2))
     unit_cell_dimensions = np.round(np.array([pixel_size*num_pix/basis_0_length, pixel_size*num_pix/basis_1_length]), 2)
 
+     # Sanity check: unit cell
+    if np.max(unit_cell_dimensions) > 500:
+        if verbose: print("Lattice unit cell max dimension is " + str(np.max(unit_cell_dimensions)) + " Angstrom. Terminating function.")
+        return None, None, None
+    if np.min(unit_cell_dimensions) < 5:
+        if verbose: print("Lattice unit cell min dimension is " + str(np.min(unit_cell_dimensions)) + " Angstrom. Terminating function.")
+        return None, None, None
+    
+    # Calculate the resolution of the farthest lattice spot from first-pass points
+    num_pix = np.max(log_diff_spectrum.shape)
+    max_rad = np.max(np.sqrt((nonredundant_lattice[0,:]**2 + nonredundant_lattice[1,:]**2)))
+    highest_resolution = np.round(pixel_size*num_pix/max_rad, 2)
+    
     # Generate the lattice points along which to search for more peaks
     lattice_indices = generate_lattice_indices(nonredundant_miller, shortened_basis, miller_index_buffer, box_radius)
     
@@ -540,7 +572,7 @@ def find_lattice(indices,
     wrapped_lattice_indices = wrap_indices(lattice_indices, log_diff_spectrum)
     
     # Search for new indices
-    new_indices = search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd, box_radius)
+    new_indices = search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd_secondpass, box_radius)
     
     # Unwrap the indices to combine with original lattice points
     new_indices_unwrapped = unwrap_indices(new_indices, log_diff_spectrum)
@@ -557,10 +589,13 @@ def find_lattice(indices,
         ax.scatter(y = combined_indices[0,:], x = combined_indices[1,:], s = np.exp(combined_amplitudes))
         ax.scatter(y = lattice_indices[0,:], x = lattice_indices[1,:], s = 1)
         plt.show()
-        
+    
+    if combined_indices.shape[1] <= 8:
+        if verbose: print("Lattice has less than " + str(min_lattice_size) + " candidate basis vectors during combine. Returning non-combined lattice.")
+        return nonredundant_lattice, unit_cell_dimensions, highest_resolution
     
     # Re-run the above pipeline on the candidate points generated
-    combined_best_basis, combined_best_miller = estimate_basis(combined_indices, combined_amplitudes)
+    combined_best_basis, combined_best_miller = estimate_basis(combined_indices, combined_amplitudes, min_lattice_size)
     combined_shortened_basis, combined_shortened_miller = shorten_basis(combined_best_basis, combined_indices)
     combined_integer_miller = filter_noninteger_miller(combined_shortened_miller)
     combined_nonredundant_miller = filter_redundant_miller(combined_integer_miller)
@@ -573,7 +608,7 @@ def find_lattice(indices,
         ax.scatter(y = combined_nonredundant_lattice[0,:], x = combined_nonredundant_lattice[1,:], s = 10)
         plt.show()
         
-    # Calculate the resolution of the farthest lattice spot
+    # Calculate the resolution of the farthest lattice spot from second-pass data
     num_pix = np.max(log_diff_spectrum.shape)
     max_rad = np.max(np.sqrt((combined_nonredundant_lattice[0,:]**2 + combined_nonredundant_lattice[1,:]**2)))
     highest_resolution = np.round(pixel_size*num_pix/max_rad, 2)
@@ -695,11 +730,11 @@ def unpad_image(padded_masked_image, original_shape):
     """
     return padded_masked_image[0:original_shape[0], 0:original_shape[1]]
 
-def export_masked_mrc(masked_image, filename, verbose=False):
+def export_masked_mrc(masked_image, filename_out, verbose=False):
     """Take unpadded masked image from unpad_image() and write out a new header"""
     
-    # Generate a new filename
-    new_filename = "masked_output/" + filename[0:-4] + "_masked.mrc"
+#     # Generate a new filename
+#     new_filename = "masked_output/" + filename[0:-4] + "_masked.mrc"
     
     # Generate a new header
     nx, ny = masked_image.shape
@@ -709,7 +744,7 @@ def export_masked_mrc(masked_image, filename, verbose=False):
     dmean = np.sum(masked_image)/(nx*ny)
     
     # Open a new file
-    masked_mrc = open(new_filename, 'wb')
+    masked_mrc = open(filename_out, 'wb')
     
     # Write the header to the new file
     iwrhdr_opened(masked_mrc, 
@@ -724,16 +759,24 @@ def export_masked_mrc(masked_image, filename, verbose=False):
     
     if verbose: print("Export complete!")
     
-def mask_image(filename, 
+def mask_image(filename,
+               filename_out,
                threshold_method,
+               pixel_size,
                verbose=False,
+               show_plots=False,
                threads=1,
                sigma=1,
                quantile=0.99,
                num_sd=3.0,
+               num_sd_secondpass=2.0,
                x_window_percent=(0, 1),
                y_window_percent=(0, 1),
-               mask_hotpixels = True,
+               miller_index_buffer=2,
+               box_radius=10,
+               min_lattice_size=5,
+               mask_hotpixels = False,
+               mask_radius=3,
                replace_distance_percent=0.05,
                return_spots=False):
     """
@@ -755,45 +798,91 @@ def mask_image(filename,
     padded_fft = scipy_fft(image, verbose, threads)
     
     # Subtract the FFT from a Gaussian-smoothed FFT
-    diff_spectrum, smoothed_spectrum = generate_diff_spectrum(padded_fft, sigma)
-    
+    log_diff_spectrum, smoothed_spectrum = generate_diff_spectrum(padded_fft, sigma)
+        
     # Find diffraction spots
     if threshold_method == "quantile":
-        diffraction_spots = find_diffraction_spots_quantile(diff_spectrum, quantile, x_window_percent, y_window_percent)
+        diffraction_indices, diffraction_amplitudes = find_diffraction_spots_quantile(log_diff_spectrum, quantile, x_window_percent, y_window_percent)
     if threshold_method == "sd":
-        diffraction_spots = find_diffraction_spots_sd(diff_spectrum, num_sd, x_window_percent, y_window_percent)
+        diffraction_indices, diffraction_amplitudes = find_diffraction_spots_sd(log_diff_spectrum, num_sd, x_window_percent, y_window_percent)
     else:
         print("No thresholding method specified. Please specify a method using the threshold_method parameter.")
         return
 
-    num_spots = diffraction_spots.shape[0]
-    
+    # Return some info if function is verbose
     if verbose:
-        print("Number of diffraction spots found: " + str(num_spots))
+        print("Number of first-pass spots found: " + str(diffraction_indices.shape[1]))
     
-    # Filter out the hot pixels
-    if mask_hotpixels:
-        if verbose: print("Removing hot pixels...")
-        diffraction_spots = diffraction_spots[remove_hotpixels(diffraction_spots, verbose)]
-        if verbose: print(str(num_spots - diffraction_spots.shape[0]) + " hot pixels removed.")
     
-    if verbose:
-        plt.figure()
-        plt.scatter(y = -diffraction_spots[:,0], x = diffraction_spots[:,1], s = 1)
-        plt.xlim((0, 500))
-        plt.ylim((-500, -0))
-        plt.show()
+    # Look for the first lattice
+    combined_nonredundant_lattice, unit_cell_dimensions, highest_resolution = find_lattice(diffraction_indices, 
+                                                                                           diffraction_amplitudes, 
+                                                                                           log_diff_spectrum,
+                                                                                           pixel_size,
+                                                                                           show_plots=show_plots,
+                                                                                           verbose=verbose, 
+                                                                                           num_sd_secondpass=num_sd_secondpass, 
+                                                                                           miller_index_buffer=miller_index_buffer,
+                                                                                           box_radius=box_radius,
+                                                                                           min_lattice_size=min_lattice_size)
+    
+    # Store the results in arrays
+    unit_cell_dimensions_array = np.array(unit_cell_dimensions)
+    highest_resolution_array = np.array(highest_resolution)
+    
+    # Initialize combined_nonredundant_lattice_2lat to something that is not None to start the lattice-finding loop
+    combined_nonredundant_lattice_2lat = 1
+    
+    # While find_lattice has returned something:
+    while combined_nonredundant_lattice_2lat is not None:
+    
+        # Filter out the hot pixels - leave off, depreciated
+        if mask_hotpixels:
+            if verbose: print("Removing hot pixels...")
+            combined_nonredundant_lattice = combined_nonredundant_lattice[remove_hotpixels(combined_nonredundant_lattice, verbose)]
+            if verbose: print(str(num_spots - combined_nonredundant_lattice.shape[0]) + " hot pixels removed.")
         
-        plt.figure()
-        plt.scatter(y = -diffraction_spots[:,0], x = diffraction_spots[:,1], s = 1)
-        plt.show()
+        # Generate the mask indices
+        mask_indices_array = generate_lattice_mask_indices(combined_nonredundant_lattice, mask_radius)
+        
+        # Replace the diffraction spots
+        masked_fft = replace_diffraction_spots(padded_fft, mask_indices_array, replace_distance_percent)
+        
+        # Generate the diff spectrum again
+        log_diff_spectrum, smoothed_spectrum = generate_diff_spectrum(masked_fft, sigma)
+        
+        # Threshold again
+        diffraction_indices, diffraction_amplitudes = find_diffraction_spots_sd(log_diff_spectrum, num_sd, x_window_percent, y_window_percent)
+        
+        # Look for another lattice
+        combined_nonredundant_lattice_2lat, unit_cell_dimensions, highest_resolution = find_lattice(diffraction_indices, 
+                                                                                           diffraction_amplitudes, 
+                                                                                           log_diff_spectrum,
+                                                                                           pixel_size,
+                                                                                           show_plots=show_plots,
+                                                                                           verbose=verbose, 
+                                                                                           num_sd_secondpass=num_sd_secondpass, 
+                                                                                           miller_index_buffer=miller_index_buffer,
+                                                                                           box_radius=box_radius,
+                                                                                           min_lattice_size=min_lattice_size)
+        
+        # If another lattice was found
+        if combined_nonredundant_lattice_2lat is not None:
+            # Combine the suspected lattice points across all lattices
+            combined_nonredundant_lattice = np.hstack((combined_nonredundant_lattice, combined_nonredundant_lattice_2lat))
+            # Append information about the current lattice
+            unit_cell_dimensions_array = np.vstack((unit_cell_dimensions_array, unit_cell_dimensions))
+            highest_resolution_array = np.append(highest_resolution_array, highest_resolution)
+                    
+    if np.sum(highest_resolution_array/highest_resolution_array[0] < 0.5) > 0:
+        if verbose:
+            print("Warning: maximum resolution of lattices differs significantly. The highest resolution lattice is more than twice the resolution of the first detected lattice.")
+            print(highest_resolution_array/highest_resolution_array[0])
     
     # Return the indices of diffraction spots if return_spots is true
+    # Used for mask_movies
     if return_spots:
-        return diffraction_spots
-    
-    # Replace the diffraction spots
-    masked_fft = replace_diffraction_spots(padded_fft, diffraction_spots, replace_distance_percent)
+        return combined_nonredundant_lattice
     
     # Perform the inverse FFT
     padded_masked_image = scipy_inverse_fft(masked_fft, verbose, threads)
@@ -802,56 +891,12 @@ def mask_image(filename,
     masked_image = unpad_image(padded_masked_image, image.shape)
     
     # Export the image as an .mrc file
-    export_masked_mrc(masked_image, filename, verbose)
+    export_masked_mrc(masked_image, filename_out, verbose)
     
     if verbose:
         print(filename + " masked successfully!")
         
 
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
 # Functions to handle movies -----------------------------------------------------------------------------------
         
         
