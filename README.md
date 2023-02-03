@@ -7,9 +7,10 @@ conda env create -f environment.yml
 
 TODO list:
 
-2. Restructure program to take command line arguments
-
+1. Test find_lattice() compatibility with mask_movie()
+2. Write a command line script to run mask_image() and mask_movie()
+3. Process PBS-apo data w/ command line
+4. Compare motion estimates
 
 Minor:
-- Write helper function to plot indices of detected spots
 - Implement pyFFTW use as a flag, test overall script execution time
