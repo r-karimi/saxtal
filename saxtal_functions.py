@@ -778,7 +778,8 @@ def mask_image(filename,
                mask_hotpixels = False,
                mask_radius=3,
                replace_distance_percent=0.05,
-               return_spots=False):
+               return_spots=False,
+               return_stats=False):
     """
     Take the filename of a micrograph in the .mrc format and subtract the streptavidin crystal lattice.
     print_timestamps: Boolean, whether to print how long it takes to perform the FFT and iFFT.
@@ -828,7 +829,7 @@ def mask_image(filename,
     
     # Store the results in arrays
     unit_cell_dimensions_array = np.array(unit_cell_dimensions)
-    highest_resolution_array = np.array(highest_resolution)
+    highest_resolution_array = np.array([highest_resolution])
     
     # Initialize combined_nonredundant_lattice_2lat to something that is not None to start the lattice-finding loop
     combined_nonredundant_lattice_2lat = 1
@@ -873,7 +874,7 @@ def mask_image(filename,
             # Append information about the current lattice
             unit_cell_dimensions_array = np.vstack((unit_cell_dimensions_array, unit_cell_dimensions))
             highest_resolution_array = np.append(highest_resolution_array, highest_resolution)
-                    
+                        
     if np.sum(highest_resolution_array/highest_resolution_array[0] < 0.5) > 0:
         if verbose:
             print("Warning: maximum resolution of lattices differs significantly. The highest resolution lattice is more than twice the resolution of the first detected lattice.")
@@ -882,7 +883,10 @@ def mask_image(filename,
     # Return the indices of diffraction spots if return_spots is true
     # Used for mask_movies
     if return_spots:
-        return combined_nonredundant_lattice
+        return mask_indices_array
+    
+    if return_stats:
+        return unit_cell_dimensions_array, highest_resolution_array
     
     # Perform the inverse FFT
     padded_masked_image = scipy_inverse_fft(masked_fft, verbose, threads)
@@ -984,11 +988,9 @@ def unpad_movie(padded_masked_movie, original_movie_shape):
     """
     return padded_masked_movie[0:original_movie_shape[0], 0:original_movie_shape[1], 0:original_movie_shape[2]]
 
-def export_masked_movie(masked_movie, movie_filename, verbose=False):
+def export_masked_movie(masked_movie, movie_filename_out, verbose=False):
     """
     """
-    # Generate a new filename
-    new_movie_filename = "masked_output/" + movie_filename[0:-4] + "_masked.mrc"
 
     # Generate a new header
     nx, ny, nz = masked_movie.shape
@@ -998,7 +1000,7 @@ def export_masked_movie(masked_movie, movie_filename, verbose=False):
     dmean = np.sum(masked_movie)/(nx*ny*nz)
     
     # Open a new file
-    masked_movie_mrc = open(new_movie_filename, 'wb')
+    masked_movie_mrc = open(movie_filename_out, 'wb')
     
     # Write the header to the new file
     iwrhdr_opened(masked_movie_mrc, 
@@ -1014,18 +1016,28 @@ def export_masked_movie(masked_movie, movie_filename, verbose=False):
     if verbose: print("Export complete!")
 
 def mask_movie(movie_filename,
+               movie_filename_out,
                micrograph_filename,
+               micrograph_filename_out,
                threshold_method,
+               pixel_size,
                verbose=False,
+               show_plots=False,
                threads=1,
                sigma=1,
                quantile=0.99,
                num_sd=3.0,
+               num_sd_secondpass=2.0,
                x_window_percent=(0, 1),
                y_window_percent=(0, 1),
-               mask_hotpixels = True,
+               miller_index_buffer=2,
+               box_radius=10,
+               min_lattice_size=5,
+               mask_hotpixels = False,
+               mask_radius=3,
                replace_distance_percent=0.05,
-               return_spots=True):
+               return_spots=True,
+               return_stats=False):
     
     # Import the movie
     movie, header = import_movie(movie_filename)
@@ -1033,26 +1045,34 @@ def mask_movie(movie_filename,
     # Perform an FFT of the movie
     padded_movie_fft = scipy_batch_fft(movie, verbose, threads)
     
-    # Find diffraction spots by running mask_image
-    diffraction_spots = mask_image(micrograph_filename, 
-                                   threshold_method, 
-                                   verbose = verbose, 
-                                   threads = threads, 
-                                   sigma = sigma, 
-                                   num_sd = num_sd, 
+    # Find spots to mask by running mask_image
+    diffraction_spots = mask_image(micrograph_filename,
+                                   micrograph_filename_out,
+                                   threshold_method,
+                                   pixel_size,
+                                   verbose = verbose,
+                                   show_plots = show_plots,
+                                   threads = threads,
+                                   sigma = sigma,
+                                   num_sd = num_sd,
+                                   num_sd_secondpass = num_sd_secondpass,
                                    x_window_percent = x_window_percent,
                                    y_window_percent = y_window_percent,
+                                   miller_index_buffer = miller_index_buffer,
+                                   box_radius = box_radius,
+                                   min_lattice_size = min_lattice_size,
                                    mask_hotpixels = mask_hotpixels,
+                                   mask_radius= mask_radius,
                                    replace_distance_percent = replace_distance_percent,
-                                   return_spots = return_spots)
-
+                                   return_spots = return_spots,
+                                   return_stats = return_stats)
+    
     # Make a new array to hold masked movie
     masked_movie_fft = np.empty(padded_movie_fft.shape, dtype=np.complex64)
-    
+        
     # Replace diffraction spots in each frame
     for z in range(header['nz']):
-        frame_fft = padded_movie_fft[:,:,z]
-        masked_movie_fft[:,:,z] = replace_diffraction_spots(frame_fft, 
+        masked_movie_fft[:,:,z] = replace_diffraction_spots(padded_movie_fft[:,:,z], 
                                                             diffraction_spots, 
                                                             replace_distance_percent)
   
@@ -1063,8 +1083,8 @@ def mask_movie(movie_filename,
     masked_movie = unpad_movie(padded_masked_movie, movie.shape)
     
     # Export masked movie
-    export_masked_movie(masked_movie, movie_filename, verbose)
+    export_masked_movie(masked_movie, movie_filename_out, verbose)
     
     if verbose:
-        print(movie_filename + " masked successfully!")
+        print(movie_filename_out + " masked successfully!")
         
