@@ -1,0 +1,16 @@
+threshold_method='sd' 
+pixel_size = 1.45
+threads=16
+sigma=15 
+num_sd=3.0
+num_sd_secondpass=2.0
+x_window_percent=(0, 0.7)
+y_window_percent=(0, 0.995)
+miller_index_buffer=2
+box_radius=10
+min_lattice_size=5
+mask_hotpixels=False
+mask_radius=5
+replace_distance_percent=0.05
+return_spots=False
+return_stats=False

@@ -10,7 +10,6 @@ import numpy as np
 import scipy.fft as sfft
 import matplotlib.pyplot as plt
 import time
-import pyfftw
 import multiprocessing
 import os
 
@@ -243,10 +242,11 @@ def estimate_basis(indices, amplitudes, min_lattice_size):
             # Compute the angle between the vectors
             angle = (360/(2*np.pi))*np.arccos(np.dot(basis_matrix[:,0], basis_matrix[:,1])/
                               (np.linalg.norm(basis_matrix[:,0])*np.linalg.norm(basis_matrix[:,1])))
-            
+                        
             # If the basis vectors are linearly dependent, skip this iteration
             # As the basis matrix will be non-invertable
-            if angle==0 or angle==180: continue
+            if np.round(angle)==0 or np.round(angle)==180 or np.isnan(angle): 
+                continue
         
             # Take the inverse
             inverse_matrix = np.linalg.inv(basis_matrix)
@@ -637,6 +637,13 @@ def generate_lattice_mask_indices(combined_nonredundant_lattice, mask_radius=2):
 
     # Collapse the list into an array
     mask_indices_array = np.transpose(np.concatenate(mask_indices_list, axis=1))
+#     print(mask_indices_array.shape)
+
+#  101_19 or 101_20 reproduces the error I think...
+#     # Make sure a point doesn't fall at the very edge of array(?)
+    mask_indices_array = mask_indices_array[np.where(mask_indices_array[:,0] < 5760),:]
+    mask_indices_array = mask_indices_array[0,:,:]
+#     print(mask_indices_array.shape)
     
     return mask_indices_array
     
@@ -1039,12 +1046,6 @@ def mask_movie(movie_filename,
                return_spots=True,
                return_stats=False):
     
-    # Import the movie
-    movie, header = import_movie(movie_filename)
-    
-    # Perform an FFT of the movie
-    padded_movie_fft = scipy_batch_fft(movie, verbose, threads)
-    
     # Find spots to mask by running mask_image
     diffraction_spots = mask_image(micrograph_filename,
                                    micrograph_filename_out,
@@ -1067,6 +1068,18 @@ def mask_movie(movie_filename,
                                    return_spots = return_spots,
                                    return_stats = return_stats)
     
+    # Import the movie
+    movie, header = import_movie(movie_filename)
+    
+    # Save the shape
+    movie_shape = movie.shape
+    
+    # Perform an FFT of the movie
+    padded_movie_fft = scipy_batch_fft(movie, verbose, threads)
+    
+    # Delete movie to save room
+    del movie
+    
     # Make a new array to hold masked movie
     masked_movie_fft = np.empty(padded_movie_fft.shape, dtype=np.complex64)
         
@@ -1080,7 +1093,7 @@ def mask_movie(movie_filename,
     padded_masked_movie = scipy_inverse_batch_fft(masked_movie_fft, verbose, threads)
     
     # Unpad the movie
-    masked_movie = unpad_movie(padded_masked_movie, movie.shape)
+    masked_movie = unpad_movie(padded_masked_movie, movie_shape)
     
     # Export masked movie
     export_masked_movie(masked_movie, movie_filename_out, verbose)
