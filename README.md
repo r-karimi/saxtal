@@ -7,9 +7,6 @@ conda env create -f environment.yml
 
 TODO list:
 
-2. Write a command line script to run mask_image() and mask_movie()
-3. Process PBS-apo data w/ command line
-4. Compare motion estimates
-
 Minor:
 - Implement pyFFTW use as a flag, test overall script execution time
+- Enable writing out of masked micrograph with micrograph_filename_out in mask_movie()
