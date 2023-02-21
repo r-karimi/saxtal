@@ -519,7 +519,8 @@ def find_lattice(indices,
                  num_sd_secondpass=2, 
                  miller_index_buffer=2, 
                  box_radius=10,
-                 min_lattice_size=5):
+                 min_lattice_size=5,
+                 epsilon=0.0707):
     """
     """
     # Unwrap indices to help find lattice
@@ -539,7 +540,7 @@ def find_lattice(indices,
     # Shorten the basis vectors
     shortened_basis, shortened_miller = shorten_basis(best_basis, unwrapped_indices, verbose)
     # Filter out points not near integer Miller indices
-    integer_miller = filter_noninteger_miller(shortened_miller)
+    integer_miller = filter_noninteger_miller(shortened_miller, epsilon)
     # Filter out points that have been assigned the same Miller indices
     nonredundant_miller = filter_redundant_miller(integer_miller)
 
@@ -631,7 +632,7 @@ def find_lattice(indices,
     # Re-run the above pipeline on the candidate points generated
     combined_best_basis, combined_best_miller = estimate_basis(combined_indices, combined_amplitudes, min_lattice_size)
     combined_shortened_basis, combined_shortened_miller = shorten_basis(combined_best_basis, combined_indices)
-    combined_integer_miller = filter_noninteger_miller(combined_shortened_miller)
+    combined_integer_miller = filter_noninteger_miller(combined_shortened_miller, epsilon)
     combined_nonredundant_miller = filter_redundant_miller(combined_integer_miller)
 
     # Recreate the lattice points in Fourier space
@@ -824,6 +825,7 @@ def mask_image(filename,
                miller_index_buffer=2,
                box_radius=10,
                min_lattice_size=5,
+               epsilon=0.0707,
                mask_hotpixels = False,
                mask_radius=3,
                replace_distance_percent=0.05,
@@ -876,7 +878,8 @@ def mask_image(filename,
                                                                                            num_sd_secondpass=num_sd_secondpass, 
                                                                                            miller_index_buffer=miller_index_buffer,
                                                                                            box_radius=box_radius,
-                                                                                           min_lattice_size=min_lattice_size)
+                                                                                           min_lattice_size=min_lattice_size,
+                                                                                           epsilon=epsilon)
     
     # Store the results in arrays
     unit_cell_dimensions_array = np.array(unit_cell_dimensions)
