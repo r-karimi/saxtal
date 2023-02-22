@@ -505,6 +505,10 @@ def search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd=3,
                 absolute_indices[1] = relative_indices[1] + (view_indices[1]-10)
                 new_points.append(absolute_indices)
     
+    # If no new points were found, return None
+    if len(new_points)==0:
+        return None
+    
     # Collapse the list of arrays into an array
     new_indices = np.concatenate(new_points, axis=1)
             
@@ -606,6 +610,10 @@ def find_lattice(indices,
     
     # Search for new indices
     new_indices = search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd_secondpass, box_radius)
+    
+    if new_indices is None:
+        if verbose: print("No new points found on second pass. Returning first pass lattice.")
+        return nonredundant_lattice, unit_cell_dimensions, highest_resolution
     
     # Unwrap the indices to combine with original lattice points
     new_indices_unwrapped = unwrap_indices(new_indices, log_diff_spectrum)
@@ -713,6 +721,7 @@ def replace_diffraction_spots(padded_fft, diffraction_indices, log_diff_spectrum
     Take FFT from scipy_fft() or west_fft() and replace diffraction spots according to indices from find_diffraction_spots.
     replace_distance_percent: fraction of x-dimension to move along the diagonal when finding new amplitude.
     """
+    
     # Generate a masked fft
     masked_fft = np.copy(padded_fft)
     
@@ -726,9 +735,9 @@ def replace_diffraction_spots(padded_fft, diffraction_indices, log_diff_spectrum
     replace_distance = int((np.min(padded_fft.shape)*replace_distance_percent)/np.sqrt(2))
     
     # Loop through axis-0, axis-1 coordinates
-    for indices in diffraction_indices:
+    for indices in wrapped_diffraction_indices:
         # If we're in the top quadrant
-        if indices[0] < int(padded_fft.shape[0]/2):
+        if indices[0] >= 0:
             # Construct the complex number by moving down and right
             # ADDITION: Take the *difference* value from another part of log diff spectrum and work backward. This should avoid issues with average intensities varying across Thon rings.
             real = np.exp(log_diff_spectrum[int(indices[0]+replace_distance), int(indices[1]+replace_distance)])*smoothed_spectrum[int(indices[0]+replace_distance), int(indices[1]+replace_distance)]
@@ -739,14 +748,13 @@ def replace_diffraction_spots(padded_fft, diffraction_indices, log_diff_spectrum
         # If we're in the bottom quadrant
         else:
             # Construct the complex number by moving up and right
-            real = np.real(masked_fft[int(indices[0]-replace_distance), int(indices[1]+replace_distance)])
             real = np.exp(log_diff_spectrum[int(indices[0]-replace_distance), int(indices[1]+replace_distance)])*smoothed_spectrum[int(indices[0]-replace_distance), int(indices[1]+replace_distance)]
             imaginary = phases[phase_count]
             replacement = real + np.imag(imaginary)
             # Replace
             masked_fft[int(indices[0]), int(indices[1])] = replacement
         # Increment the phase count
-        phase_count =+ 1
+        phase_count += 1
     
     return masked_fft
 
