@@ -1,7 +1,7 @@
 # Import packages
 
 from funcs_mrcio import iwrhdr_opened, irdhdr_opened, iwrsec_opened, irdsec_opened
-from skimage.filters import gaussian
+from skimage.filters import gaussian, threshold_mean
 from skimage.exposure import rescale_intensity
 from tqdm import tqdm
 from itertools import product
@@ -122,13 +122,16 @@ def generate_diff_spectrum(padded_fft, sigma=1):
     """
     
     # Generate the power spectrum of padded FFT
-    padded_spectrum = np.abs(padded_fft)
+    padded_spectrum = np.log(np.abs(padded_fft))
     
     # Smooth the power spectrum with Gaussian filter
     smoothed_spectrum = gaussian(padded_spectrum, sigma)
     
     # Return the difference spectrum
-    log_diff_spectrum = np.log(padded_spectrum/smoothed_spectrum)
+    log_diff_spectrum = padded_spectrum - smoothed_spectrum
+    
+    # Smooth again, not sure why
+    log_diff_spectrum = gaussian(log_diff_spectrum, 1)
     
     return log_diff_spectrum, smoothed_spectrum
 
@@ -172,16 +175,18 @@ def find_diffraction_spots_sd(log_diff_spectrum, num_sd=3.0, x_window_percent=(0
     """
     
     # Define minimum and maximum indices of the window
-    y_min = int(log_diff_spectrum.shape[0]*y_window_percent[0])
-    y_max = int(log_diff_spectrum.shape[0]*y_window_percent[1])
-    x_min = int(log_diff_spectrum.shape[1]*x_window_percent[0])
-    x_max = int(log_diff_spectrum.shape[1]*x_window_percent[1])
+    y_min = np.round(log_diff_spectrum.shape[0]*y_window_percent[0]).astype(int)
+    y_max = np.round(log_diff_spectrum.shape[0]*y_window_percent[1]).astype(int)
+    x_min = np.round(log_diff_spectrum.shape[1]*x_window_percent[0]).astype(int)
+    x_max = np.round(log_diff_spectrum.shape[1]*x_window_percent[1]).astype(int)
 
+    print(y_min, x_min, y_max, x_max)
     # Calculate the mean on a  subset of the spectrum
     mean = np.mean(log_diff_spectrum[y_min:y_max, x_min:x_max]).flatten()
     # Calculate the standard deviation
     sd = np.std(log_diff_spectrum[y_min:y_max, x_min:x_max]).flatten()
-   
+    print(mean, sd)
+    
     # Find the indices of points where the value is greater than the threshold
     spot_indices = np.where(log_diff_spectrum >= mean+(num_sd*sd))
     
@@ -496,9 +501,10 @@ def search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd=3,
             # Find its indices
             relative_indices = np.where(view_array >= mean + num_sd*sd)
             
-            # See if its within a 5x5 box from the suspected location
-            if np.max(np.abs(relative_indices)) < 3:
-
+            # See if its within a 7x7 box from the suspected location
+            if np.max(np.abs(relative_indices)) <= 4:
+            # Turns out, this criterion is too stringent
+            
                 # Adjust them relative to the starting index
                 absolute_indices = np.copy(relative_indices)
                 absolute_indices[0] = relative_indices[0] + (view_indices[0]-10)
@@ -508,7 +514,7 @@ def search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd=3,
     # If no new points were found, return None
     if len(new_points)==0:
         return None
-    
+        
     # Collapse the list of arrays into an array
     new_indices = np.concatenate(new_points, axis=1)
             
@@ -559,8 +565,8 @@ def find_lattice(indices,
         plt.title("Detected Lattice, First Pass")
         plt.show()
     
-    # If the nonredundant lattice has less than 5 points, don't return a new lattice
-    if nonredundant_miller.shape[1] <= min_lattice_size:
+    # If the nonredundant lattice has less than n points, don't return a new lattice
+    if nonredundant_miller.shape[1] < min_lattice_size:
         if verbose: print("Lattice has less than " + str(min_lattice_size) + " points. Terminating function.")
         return None, None, None
         
@@ -609,11 +615,12 @@ def find_lattice(indices,
     wrapped_lattice_indices = wrap_indices(lattice_indices, log_diff_spectrum)
     
     # Search for new indices
+    # Something is going wrong here...
     new_indices = search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd_secondpass, box_radius)
     
-    if new_indices is None:
-        if verbose: print("No new points found on second pass. Returning first pass lattice.")
-        return nonredundant_lattice, unit_cell_dimensions, highest_resolution
+#     if new_indices is None:
+#         if verbose: print("No new points found on second pass. Returning first pass lattice.")
+#         return nonredundant_lattice, unit_cell_dimensions, highest_resolution
     
     # Unwrap the indices to combine with original lattice points
     new_indices_unwrapped = unwrap_indices(new_indices, log_diff_spectrum)
@@ -633,7 +640,7 @@ def find_lattice(indices,
         plt.title("Second Pass Detected Points")
         plt.show()
     
-    if combined_indices.shape[1] <= 8:
+    if combined_indices.shape[1] < min_lattice_size:
         if verbose: print("Lattice has less than", min_lattice_size, "candidate basis vectors during combine. Returning non-combined lattice.")
         return nonredundant_lattice, unit_cell_dimensions, highest_resolution
     
@@ -690,11 +697,11 @@ def generate_lattice_mask_indices(combined_nonredundant_lattice, mask_radius=2):
 
 #  101_19 or 101_20 reproduces the error I think...
 #     # Make sure a point doesn't fall at the very edge of array(?)
-    mask_indices_array = mask_indices_array[np.where(mask_indices_array[:,0] < 5760),:]
-    mask_indices_array = mask_indices_array[0,:,:]
+#     mask_indices_array = mask_indices_array[np.where(mask_indices_array[:,0] < 5760),:]
+#     mask_indices_array = mask_indices_array[0,:,:]
 #     print(mask_indices_array.shape)
     
-    return mask_indices_array
+    return np.round(mask_indices_array).astype(int)
     
 # ------------------------------------------------------------------------------------------------------------
 
@@ -716,43 +723,60 @@ def remove_hotpixels(diffraction_indices, verbose=False):
 
 
 
-def replace_diffraction_spots(padded_fft, diffraction_indices, log_diff_spectrum, smoothed_spectrum, replace_distance_percent=0.05):
+def replace_diffraction_spots(padded_fft, diffraction_indices, smoothed_spectrum, replace_angle=20):
     """
     Take FFT from scipy_fft() or west_fft() and replace diffraction spots according to indices from find_diffraction_spots.
-    replace_distance_percent: fraction of x-dimension to move along the diagonal when finding new amplitude.
+    replace_angle
     """
+    
+    print(diffraction_indices)
+    # Unwrap the diffraction indices
+    diffraction_indices = np.transpose(unwrap_indices(np.transpose(diffraction_indices), padded_fft))
+    
+    print("unwrap")
+    print(diffraction_indices)
     
     # Generate a masked fft
     masked_fft = np.copy(padded_fft)
     
-    # Generate a vector of random phases with the same length as number of diffraction_spots
+    # Generate a vector of random phases with the same length as number of diffraction_indices
     phases = np.random.uniform(low = 0.0,
                                high = 2*np.pi,
                                size = diffraction_indices.shape[0])
     phase_count = 0
     
-    # Figure out the movement distances horizontally and vertically
-    replace_distance = int((np.min(padded_fft.shape)*replace_distance_percent)/np.sqrt(2))
-    
-    # Loop through axis-0, axis-1 coordinates
-    for indices in wrapped_diffraction_indices:
-        # If we're in the top quadrant
+    # Construct rotation matrices
+    rad = (replace_angle/180)*np.pi
+    rot_c = np.array([[np.cos(rad), -np.sin(rad)], [np.sin(rad), np.cos(rad)]])
+    rot_cc = np.array([[np.cos(rad), np.sin(rad)], [-np.sin(rad), np.cos(rad)]])
+
+    for indices in diffraction_indices:
+        print(indices[0])
+        # For all pairs of indices
         if indices[0] >= 0:
-            # Construct the complex number by moving down and right
-            # ADDITION: Take the *difference* value from another part of log diff spectrum and work backward. This should avoid issues with average intensities varying across Thon rings.
-            real = np.exp(log_diff_spectrum[int(indices[0]+replace_distance), int(indices[1]+replace_distance)])*smoothed_spectrum[int(indices[0]+replace_distance), int(indices[1]+replace_distance)]
-            imaginary = phases[phase_count]
-            replacement = real + np.imag(imaginary)
-            # Replace
-            masked_fft[int(indices[0]), int(indices[1])] = replacement
-        # If we're in the bottom quadrant
+        # If the y-value is greater than 0, rotate the indices 20 degrees clockwise
+            rot_indices = np.round(np.matmul(rot_c, indices)).astype(int)
+            print("hi")
         else:
-            # Construct the complex number by moving up and right
-            real = np.exp(log_diff_spectrum[int(indices[0]-replace_distance), int(indices[1]+replace_distance)])*smoothed_spectrum[int(indices[0]-replace_distance), int(indices[1]+replace_distance)]
-            imaginary = phases[phase_count]
-            replacement = real + np.imag(imaginary)
-            # Replace
-            masked_fft[int(indices[0]), int(indices[1])] = replacement
+        # If not, rotate the indices 20 degrees counterclockwise
+            rot_indices = np.round(np.matmul(rot_cc, indices)).astype(int)
+            print("not hi")
+
+        # Wrap rot_indices to be able to pull from padded_fft
+        if rot_indices[0] < 0:
+            rot_indices[0] = rot_indices[0] + np.max(padded_fft.shape)
+            
+        # Pull the amplitude from the rotated smoothed spectrum
+        real = padded_fft[np.min((rot_indices[0], masked_fft.shape[0]-1)), np.min((rot_indices[1], masked_fft.shape[1]-1))]
+
+        # Pull the phase from the random list
+        imaginary = phases[phase_count]
+
+        # Replace the value in the masked fft
+        replacement = real + np.imag(imaginary)
+        
+        masked_fft[indices[0], indices[1]] = replacement
+
         # Increment the phase count
         phase_count += 1
     
@@ -836,7 +860,7 @@ def mask_image(filename,
                epsilon=0.0707,
                mask_hotpixels = False,
                mask_radius=3,
-               replace_distance_percent=0.05,
+               replace_angle=20,
                return_spots=False,
                return_stats=False,
                return_fft=False,
@@ -909,7 +933,7 @@ def mask_image(filename,
         mask_indices_array = generate_lattice_mask_indices(combined_nonredundant_lattice, mask_radius)
         
         # Replace the diffraction spots
-        masked_fft = replace_diffraction_spots(padded_fft, mask_indices_array, log_diff_spectrum, smoothed_spectrum, replace_distance_percent)
+        masked_fft = replace_diffraction_spots(padded_fft, mask_indices_array, smoothed_spectrum, replace_angle)
         
         # Generate the diff spectrum again
         log_diff_spectrum, smoothed_spectrum = generate_diff_spectrum(masked_fft, sigma)
@@ -1103,7 +1127,7 @@ def mask_movie(movie_filename,
                min_lattice_size=5,
                mask_hotpixels = False,
                mask_radius=3,
-               replace_distance_percent=0.05,
+               replace_angle=20,
                return_spots=True,
                return_stats=False):
     
