@@ -128,12 +128,12 @@ def generate_diff_spectrum(padded_fft, sigma=1):
     smoothed_spectrum = gaussian(padded_spectrum, sigma)
     
     # Return the difference spectrum
-    log_diff_spectrum = padded_spectrum - smoothed_spectrum
+    amplitude_spectrum = padded_spectrum - smoothed_spectrum
     
     # Smooth again, not sure why
-    log_diff_spectrum = gaussian(log_diff_spectrum, 1)
+    log_diff_spectrum = gaussian(amplitude_spectrum, 1)
     
-    return log_diff_spectrum, smoothed_spectrum
+    return log_diff_spectrum, smoothed_spectrum, amplitude_spectrum
 
 def find_diffraction_spots_quantile(log_diff_spectrum, quantile=0.99, x_window_percent = (0, 1), y_window_percent = (0, 1)):
     """
@@ -168,7 +168,7 @@ def find_diffraction_spots_quantile(log_diff_spectrum, quantile=0.99, x_window_p
     
     return diffraction_indices, diffraction_amplitudes
 
-def find_diffraction_spots_sd(log_diff_spectrum, num_sd=3.0, x_window_percent=(0, 1), y_window_percent=(0, 1)):
+def find_diffraction_spots_sd(log_diff_spectrum, amplitude_spectrum, num_sd=3.0, x_window_percent=(0, 1), y_window_percent=(0, 1)):
     """
     Take a difference spectrum and find outliers past a certain number of SDs from the mean,
     taking a user-defined window of the FFT.
@@ -180,12 +180,10 @@ def find_diffraction_spots_sd(log_diff_spectrum, num_sd=3.0, x_window_percent=(0
     x_min = np.round(log_diff_spectrum.shape[1]*x_window_percent[0]).astype(int)
     x_max = np.round(log_diff_spectrum.shape[1]*x_window_percent[1]).astype(int)
 
-    print(y_min, x_min, y_max, x_max)
     # Calculate the mean on a  subset of the spectrum
     mean = np.mean(log_diff_spectrum[y_min:y_max, x_min:x_max]).flatten()
     # Calculate the standard deviation
     sd = np.std(log_diff_spectrum[y_min:y_max, x_min:x_max]).flatten()
-    print(mean, sd)
     
     # Find the indices of points where the value is greater than the threshold
     spot_indices = np.where(log_diff_spectrum >= mean+(num_sd*sd))
@@ -199,7 +197,7 @@ def find_diffraction_spots_sd(log_diff_spectrum, num_sd=3.0, x_window_percent=(0
     # Extract the amplitudes of these points
     diffraction_amplitudes = np.empty(len(diffraction_indices[0]))
     for i in range(len(diffraction_indices[0])):
-        diffraction_amplitudes[i] = log_diff_spectrum[diffraction_indices[0,i], diffraction_indices[1, i]]
+        diffraction_amplitudes[i] = amplitude_spectrum[diffraction_indices[0,i], diffraction_indices[1, i]]
     
     return diffraction_indices, diffraction_amplitudes
 
@@ -501,10 +499,8 @@ def search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd=3,
             # Find its indices
             relative_indices = np.where(view_array >= mean + num_sd*sd)
             
-            # See if its within a 7x7 box from the suspected location
-            if np.max(np.abs(relative_indices)) <= 4:
-            # Turns out, this criterion is too stringent
-            
+            # See if its within n from the suspected location
+            if np.max(np.abs(relative_indices)) <= 3:
                 # Adjust them relative to the starting index
                 absolute_indices = np.copy(relative_indices)
                 absolute_indices[0] = relative_indices[0] + (view_indices[0]-10)
@@ -537,7 +533,9 @@ def find_lattice(indices,
     unwrapped_indices = unwrap_indices(indices, log_diff_spectrum)
     
     if show_plots: 
-        plt.scatter(y = unwrapped_indices[0,:], x = unwrapped_indices[1,:], s = np.exp(amplitudes))
+        fig, ax = plt.subplots()
+        ax.set_aspect('equal', 'box')
+        ax.scatter(y = unwrapped_indices[0,:], x = unwrapped_indices[1,:], s = np.exp(amplitudes))
         plt.title("Diffraction Spots, First Pass")
         plt.show()
     
@@ -559,6 +557,7 @@ def find_lattice(indices,
 
     if show_plots:        
         fig, ax = plt.subplots()
+        ax.set_aspect('equal', 'box')
         ax.scatter(y = unwrapped_indices[0,:], x = unwrapped_indices[1,:], s = np.exp(amplitudes), label="Diffraction Spots")
         ax.scatter(y = nonredundant_lattice[0,:], x = nonredundant_lattice[1,:], s = 2, label="Estimated Lattice")
         ax.legend(loc='best')
@@ -605,6 +604,7 @@ def find_lattice(indices,
     
     if show_plots:
         fig, ax = plt.subplots()
+        ax.set_aspect('equal', 'box')
         ax.scatter(y = nonredundant_lattice[0,:], x = nonredundant_lattice[1,:], s = 10, label="Observed Lattice")
         ax.scatter(y = lattice_indices[0,:], x = lattice_indices[1,:], s = 1, label="Search Locations")
         ax.legend(loc='best')
@@ -618,9 +618,9 @@ def find_lattice(indices,
     # Something is going wrong here...
     new_indices = search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd_secondpass, box_radius)
     
-#     if new_indices is None:
-#         if verbose: print("No new points found on second pass. Returning first pass lattice.")
-#         return nonredundant_lattice, unit_cell_dimensions, highest_resolution
+    if new_indices is None:
+        if verbose: print("No new points found on second pass. Returning first pass lattice.")
+        return nonredundant_lattice, unit_cell_dimensions, highest_resolution
     
     # Unwrap the indices to combine with original lattice points
     new_indices_unwrapped = unwrap_indices(new_indices, log_diff_spectrum)
@@ -634,6 +634,7 @@ def find_lattice(indices,
     
     if show_plots:
         fig, ax = plt.subplots()
+        ax.set_aspect('equal', 'box')
         ax.scatter(y = combined_indices[0,:], x = combined_indices[1,:], s = np.exp(combined_amplitudes), label="Diffraction Spots")
         ax.scatter(y = lattice_indices[0,:], x = lattice_indices[1,:], s = 1, label="Search Locations")
         ax.legend(loc='best')
@@ -655,6 +656,7 @@ def find_lattice(indices,
     
     if show_plots:
         fig, ax = plt.subplots()
+        ax.set_aspect('equal', 'box')
         ax.scatter(y = combined_nonredundant_lattice[0,:], x = combined_nonredundant_lattice[1,:], s = 10, label="Observed Lattice")
         ax.scatter(y = lattice_indices[0,:], x = lattice_indices[1,:], s = 1, label="Search Locations")
         ax.legend(loc='best')
@@ -726,16 +728,12 @@ def remove_hotpixels(diffraction_indices, verbose=False):
 def replace_diffraction_spots(padded_fft, diffraction_indices, smoothed_spectrum, replace_angle=20):
     """
     Take FFT from scipy_fft() or west_fft() and replace diffraction spots according to indices from find_diffraction_spots.
-    replace_angle
+    replace_angle is the angle along which to rotate the points to replace them (to replace from the same Thon ring)
     """
     
-    print(diffraction_indices)
     # Unwrap the diffraction indices
     diffraction_indices = np.transpose(unwrap_indices(np.transpose(diffraction_indices), padded_fft))
-    
-    print("unwrap")
-    print(diffraction_indices)
-    
+        
     # Generate a masked fft
     masked_fft = np.copy(padded_fft)
     
@@ -751,16 +749,13 @@ def replace_diffraction_spots(padded_fft, diffraction_indices, smoothed_spectrum
     rot_cc = np.array([[np.cos(rad), np.sin(rad)], [-np.sin(rad), np.cos(rad)]])
 
     for indices in diffraction_indices:
-        print(indices[0])
         # For all pairs of indices
         if indices[0] >= 0:
         # If the y-value is greater than 0, rotate the indices 20 degrees clockwise
             rot_indices = np.round(np.matmul(rot_c, indices)).astype(int)
-            print("hi")
         else:
         # If not, rotate the indices 20 degrees counterclockwise
             rot_indices = np.round(np.matmul(rot_cc, indices)).astype(int)
-            print("not hi")
 
         # Wrap rot_indices to be able to pull from padded_fft
         if rot_indices[0] < 0:
@@ -884,13 +879,13 @@ def mask_image(filename,
     padded_fft = scipy_fft(image, verbose, threads)
     
     # Subtract the FFT from a Gaussian-smoothed FFT
-    log_diff_spectrum, smoothed_spectrum = generate_diff_spectrum(padded_fft, sigma)
+    log_diff_spectrum, smoothed_spectrum, amplitude_spectrum = generate_diff_spectrum(padded_fft, sigma)
         
     # Find diffraction spots
     if threshold_method == "quantile":
         diffraction_indices, diffraction_amplitudes = find_diffraction_spots_quantile(log_diff_spectrum, quantile, x_window_percent, y_window_percent)
     if threshold_method == "sd":
-        diffraction_indices, diffraction_amplitudes = find_diffraction_spots_sd(log_diff_spectrum, num_sd, x_window_percent, y_window_percent)
+        diffraction_indices, diffraction_amplitudes = find_diffraction_spots_sd(log_diff_spectrum, amplitude_spectrum, num_sd, x_window_percent, y_window_percent)
     else:
         print("No thresholding method specified. Please specify a method using the threshold_method parameter.")
         return
@@ -936,10 +931,10 @@ def mask_image(filename,
         masked_fft = replace_diffraction_spots(padded_fft, mask_indices_array, smoothed_spectrum, replace_angle)
         
         # Generate the diff spectrum again
-        log_diff_spectrum, smoothed_spectrum = generate_diff_spectrum(masked_fft, sigma)
+        log_diff_spectrum, smoothed_spectrum, amplitude_spectrum = generate_diff_spectrum(masked_fft, sigma)
         
         # Threshold again
-        diffraction_indices, diffraction_amplitudes = find_diffraction_spots_sd(log_diff_spectrum, num_sd, x_window_percent, y_window_percent)
+        diffraction_indices, diffraction_amplitudes = find_diffraction_spots_sd(log_diff_spectrum, amplitude_spectrum, num_sd, x_window_percent, y_window_percent)
         
         # Look for another lattice
         combined_nonredundant_lattice_2lat, unit_cell_dimensions, highest_resolution = find_lattice(diffraction_indices, 
