@@ -432,14 +432,19 @@ def refine_basis(shortened_basis, nonredundant_miller, verbose=False):
     # Return the refined basis
     return refined_basis
     
-def generate_lattice_indices(basis, log_diff_spectrum):
+def generate_lattice_indices(nonredundant_miller, best_basis, log_diff_spectrum, miller_index_buffer=2, box_radius=10):
     """
     Generate the Fourier-space indices of a complete lattice of Miller indices to
     do a more sensitive search for other spots that belong to the reciprocal lattice.
     miller_index_buffer controls how far outside the detected lattice to search.
     """
     
-    # Try making a giant list to span the whole FFT
+    # Generate a combinatorial list of Miller indices to search
+#     highest_miller_index = int(np.max(np.round(nonredundant_miller))) + miller_index_buffer
+#     lowest_miller_index = int(np.min(np.round(nonredundant_miller))) - miller_index_buffer
+    #lowest_miller_index = -highest_miller_index
+    
+    # Try making a giant list
     highest_miller_index = 500
     lowest_miller_index = -500
     
@@ -447,13 +452,13 @@ def generate_lattice_indices(basis, log_diff_spectrum):
     test_miller = np.transpose(np.array(list(product(permute_list, repeat=2))))
     
     # Convert to Fourier space indices
-    test_indices = np.matmul(basis, test_miller)
-    
-    # Trim the test indices to our FFT size
-    x_min = int(0)
+    test_indices = np.matmul(best_basis, test_miller)
+
+    # Generate the bounds to search
+    x_min = int(box_radius)
     x_max = int(log_diff_spectrum.shape[1])
 
-    y_min = int(-log_diff_spectrum.shape[0]/2)
+    y_min = int(-log_diff_spectrum.shape[0]/2 + box_radius)
     y_max = int(-y_min)
     
     y_inrange = np.logical_and(test_indices[0,:] > y_min, test_indices[0,:] < y_max)
@@ -465,12 +470,17 @@ def generate_lattice_indices(basis, log_diff_spectrum):
     return lattice_indices
 
 
-def search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd=3, box_radius=10):
-    """
+def search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd=3, box_radius=10, x_window_percent=(0,1), y_window_percent=(0,1)):
     
-    """
     # Initialize an empty list to hold new points found in the below loop
     new_points = []
+    
+    # Compute the global mean and sd
+    
+    # Calculate the mean on a  subset of the spectrum
+    mean = np.mean(log_diff_spectrum[y_min:y_max, x_min:x_max]).flatten()
+    # Calculate the standard deviation
+    sd = np.std(log_diff_spectrum[y_min:y_max, x_min:x_max]).flatten()
 
     # For each suspected lattice point
     for i in range(wrapped_lattice_indices.shape[1]):
@@ -482,23 +492,17 @@ def search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd=3,
         view_array = log_diff_spectrum[(view_indices[0]-box_radius):(view_indices[0]+(box_radius+1)),
                                        (view_indices[1]-box_radius):(view_indices[1]+(box_radius+1))]
 
-        # Look for points >num_sd SD above the background
-        mean = np.mean(view_array)
-        sd = np.std(view_array)
-
         # If a point is found
         if(np.sum(view_array >= mean + num_sd*sd) > 0):
 
             # Find its indices
             relative_indices = np.where(view_array >= mean + num_sd*sd)
             
-            # See if its within n from the suspected location
-            if np.max(np.abs(relative_indices)) <= 3:
-                # Adjust them relative to the starting index
-                absolute_indices = np.copy(relative_indices)
-                absolute_indices[0] = relative_indices[0] + (view_indices[0]-box_radius)
-                absolute_indices[1] = relative_indices[1] + (view_indices[1]-box_radius)
-                new_points.append(absolute_indices)
+            # Adjust them relative to the starting index
+            absolute_indices = np.copy(relative_indices)
+            absolute_indices[0] = relative_indices[0] + (view_indices[0]-box_radius)
+            absolute_indices[1] = relative_indices[1] + (view_indices[1]-box_radius)
+            new_points.append(absolute_indices)
     
     # If no new points were found, return None
     if len(new_points)==0:
@@ -534,7 +538,7 @@ def find_lattice(indices,
     
     if unwrapped_indices.shape[1] <= min_lattice_size:
         if verbose: print("Lattice has less than " + str(min_lattice_size) + " candidate basis vectors during first pass. Terminating function.")
-        return None, None, None
+        return indices, None, None
     
     # Estmate the basis
     best_basis, best_miller = estimate_basis(unwrapped_indices, amplitudes, min_lattice_size)
@@ -560,7 +564,7 @@ def find_lattice(indices,
     # If the nonredundant lattice has less than n points, don't return a new lattice
     if nonredundant_miller.shape[1] < min_lattice_size:
         if verbose: print("Lattice has less than " + str(min_lattice_size) + " points. Terminating function.")
-        return None, None, None
+        return indices, None, None
         
     # Refine the lattice to estimate unit cell dimensions
     refined_basis = refine_basis(shortened_basis, nonredundant_miller, verbose)
@@ -577,10 +581,10 @@ def find_lattice(indices,
      # Sanity check: unit cell
     if np.max(unit_cell_dimensions) > 63:
         if verbose: print("Lattice unit cell max dimension is", np.max(unit_cell_dimensions), "Angstrom. Terminating function.")
-        return None, None, None
+        return indices, None, None
     if np.min(unit_cell_dimensions) < 53:
         if verbose: print("Lattice unit cell min dimension is", np.min(unit_cell_dimensions), "Angstrom. Terminating function.")
-        return None, None, None
+        return indices, None, None
     
     # Calculate the resolution of the farthest lattice spot from first-pass points
     num_pix = np.max(log_diff_spectrum.shape)
@@ -589,9 +593,7 @@ def find_lattice(indices,
     
     # Print highest resolution if verbose:
     if verbose: print("Highest resolution spot (A):", highest_resolution)
-    
-    # ---- consider making a new function from the lines below ----- #
-    
+        
     # Generate the lattice points along which to search for more peaks
     lattice_indices = generate_lattice_indices(nonredundant_miller, shortened_basis, log_diff_spectrum, miller_index_buffer, box_radius)
     
@@ -608,12 +610,11 @@ def find_lattice(indices,
     wrapped_lattice_indices = wrap_indices(lattice_indices, log_diff_spectrum)
     
     # Search for new indices
-    # Something is going wrong here...
-    new_indices = search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd_secondpass, box_radius)
+    new_indices = search_lattice_indices(wrapped_lattice_indices, log_diff_spectrum, num_sd_secondpass, box_radius, x_window_percent, y_window_percent)
     
     if new_indices is None:
         if verbose: print("No new points found on second pass. Returning first pass lattice.")
-        return nonredundant_lattice, unit_cell_dimensions, highest_resolution
+        return indices, unit_cell_dimensions, highest_resolution
     
     # Unwrap the indices to combine with original lattice points
     new_indices_unwrapped = unwrap_indices(new_indices, log_diff_spectrum)
@@ -621,9 +622,13 @@ def find_lattice(indices,
     # Combine the new candidate points with the old points, filter for unique points
     combined_indices = np.unique(np.hstack((nonredundant_lattice, new_indices_unwrapped)), axis=1)
     
+    # Return combined_indices!
+    
     # Extract the respective amplitudes for combined_indices from log_diff_spectrum
     combined_amplitudes = log_diff_spectrum[wrap_indices(combined_indices, log_diff_spectrum)[0,:], 
                                             wrap_indices(combined_indices, log_diff_spectrum)[1,:]]
+    
+    # Return combined_amplitudes!
     
     if show_plots:
         fig, ax = plt.subplots()
@@ -667,7 +672,7 @@ def find_lattice(indices,
     # Wrap the points in Fourier space before returning
     combined_nonredundant_lattice = wrap_indices(combined_nonredundant_lattice, log_diff_spectrum)
     
-    return combined_nonredundant_lattice, unit_cell_dimensions, highest_resolution
+    return combined_indices, unit_cell_dimensions, highest_resolution
     
     
 def generate_lattice_mask_indices(combined_nonredundant_lattice, mask_radius=2):
@@ -700,15 +705,33 @@ def generate_lattice_mask_indices(combined_nonredundant_lattice, mask_radius=2):
     
 # ------------------------------------------------------------------------------------------------------------
 
-def replace_diffraction_spots(padded_fft, diffraction_indices, replace_angle=20):
+def remove_hotpixels(diffraction_indices, verbose=False):
+    """
+    Removes isolated "hot" pixels that exceed amplitude threshold but
+    have no immediate neighbours, so are likely not part of the
+    reciprocal lattice.
+    """
+    filter_list = []
+    for ex_spot in tqdm(diffraction_indices, disable=not verbose):
+        y_neighbours = np.sum((diffraction_indices == (ex_spot[0]+1, ex_spot[1])).all(axis=1)) + np.sum((diffraction_indices == (ex_spot[0]-1, ex_spot[1])).all(axis=1))
+        x_neighbours = np.sum((diffraction_indices == (ex_spot[0], ex_spot[1]+1)).all(axis=1)) + np.sum((diffraction_indices == (ex_spot[0]-1, ex_spot[1]-1)).all(axis=1))
+        if x_neighbours >= 1 or y_neighbours >= 1:
+            filter_list.append(True)
+        else: 
+            filter_list.append(False)
+    return filter_list
+
+
+
+def replace_diffraction_spots(padded_fft, diffraction_indices, smoothed_spectrum, replace_angle=20):
     """
     Take FFT from scipy_fft() or west_fft() and replace diffraction spots according to indices from find_diffraction_spots.
     replace_angle is the angle along which to rotate the points to replace them (to replace from the same Thon ring)
     """
     
-    # Transpose diffraction indices
-    diffraction_indices = np.round(np.transpose(diffraction_indices)).astype(int)
-    
+    # Unwrap the diffraction indices
+    diffraction_indices = np.transpose(unwrap_indices(np.transpose(diffraction_indices), padded_fft))
+        
     # Generate a masked fft
     masked_fft = np.copy(padded_fft)
     
@@ -736,19 +759,15 @@ def replace_diffraction_spots(padded_fft, diffraction_indices, replace_angle=20)
         if rot_indices[0] < 0:
             rot_indices[0] = rot_indices[0] + np.max(padded_fft.shape)
             
-        # Pull the amplitude from padded_fft
+        # Pull the amplitude from the rotated smoothed spectrum
         real = padded_fft[np.min((rot_indices[0], masked_fft.shape[0]-1)), np.min((rot_indices[1], masked_fft.shape[1]-1))]
 
         # Pull the phase from the random list
         imaginary = phases[phase_count]
-        
-        # Wrap indices for replacement
-        if indices[0] < 0:
-            indices[0] = indices[0] + np.max(padded_fft.shape)
 
         # Replace the value in the masked fft
         replacement = real + np.imag(imaginary)
-                
+        
         masked_fft[indices[0], indices[1]] = replacement
 
         # Increment the phase count
@@ -875,7 +894,7 @@ def mask_image(filename,
     
     
     # Look for the first lattice
-    combined_nonredundant_lattice, unit_cell_dimensions, highest_resolution = find_lattice(diffraction_indices, 
+    combined_indices, unit_cell_dimensions, highest_resolution = find_lattice(diffraction_indices, 
                                                                                            diffraction_amplitudes, 
                                                                                            log_diff_spectrum,
                                                                                            pixel_size,
@@ -895,19 +914,13 @@ def mask_image(filename,
     combined_nonredundant_lattice_2lat = 1
     
     # While find_lattice has returned something:
-    while combined_nonredundant_lattice_2lat is not None:
+    while unit_cell_dimensions is not None:
     
-        # Filter out the hot pixels - leave off, depreciated
-        if mask_hotpixels:
-            if verbose: print("Removing hot pixels...")
-            combined_nonredundant_lattice = combined_nonredundant_lattice[remove_hotpixels(combined_nonredundant_lattice, verbose)]
-            if verbose: print(str(num_spots - combined_nonredundant_lattice.shape[0]) + " hot pixels removed.")
-        
         # Generate the mask indices
         mask_indices_array = generate_lattice_mask_indices(combined_nonredundant_lattice, mask_radius)
         
         # Replace the diffraction spots
-        masked_fft = replace_diffraction_spots(padded_fft, mask_indices_array, smoothed_spectrum, replace_angle)
+        masked_fft = replace_diffraction_spots(padded_fft, combined_indices, smoothed_spectrum, replace_angle)
         
         # Generate the diff spectrum again
         log_diff_spectrum, smoothed_spectrum, amplitude_spectrum = generate_diff_spectrum(masked_fft, sigma)
@@ -928,9 +941,11 @@ def mask_image(filename,
                                                                                            min_lattice_size=min_lattice_size)
         
         # If another lattice was found
-        if combined_nonredundant_lattice_2lat is not None:
+        if unit_cell_dimensions is not None:
             # Combine the suspected lattice points across all lattices
-            combined_nonredundant_lattice = np.hstack((combined_nonredundant_lattice, combined_nonredundant_lattice_2lat))
+            combined_indices_2lat = np.hstack((combined_indices, combined_nonredundant_lattice_2lat))
+            # Generate the new set of points to mask
+            combined_indices = combined_nonredundant_lattice_2lat
             # Append information about the current lattice
             unit_cell_dimensions_array = np.vstack((unit_cell_dimensions_array, unit_cell_dimensions))
             highest_resolution_array = np.append(highest_resolution_array, highest_resolution)
@@ -943,7 +958,7 @@ def mask_image(filename,
     # Return the indices of diffraction spots if return_spots is true
     # Used for mask_movies
     if return_spots:
-        return mask_indices_array
+        return combined_indices_2lat
     
     if return_stats:
         return unit_cell_dimensions_array, highest_resolution_array
