@@ -498,7 +498,7 @@ def find_lattice(unwrapped_indices,
     # If there aren't enough indices to perform lattice-finding, return.
     if unwrapped_indices.shape[1] <= min_lattice_size:
         if verbose: print("Lattice has less than " + str(min_lattice_size) + " candidate basis vectors during first pass. Terminating function and returning input indices.")
-        return indices, None, None
+        return unwrapped_indices, None, None
     
     # Estmate the basis
     best_basis, best_miller = estimate_basis(unwrapped_indices, amplitudes, min_lattice_size)
@@ -524,7 +524,7 @@ def find_lattice(unwrapped_indices,
     # If the nonredundant lattice has less than min_lattice_size points, return.
     if nonredundant_miller.shape[1] < min_lattice_size:
         if verbose: print("Lattice has less than " + str(min_lattice_size) + " points. Terminating function and returning input indices.")
-        return indices, None, None
+        return unwrapped_indices, None, None
     
     # Refine the lattice to estimate unit cell dimensions
     refined_basis = refine_basis(shortened_basis, nonredundant_miller, verbose)
@@ -541,7 +541,7 @@ def find_lattice(unwrapped_indices,
      # Sanity check: unit cell
     if np.max(unit_cell_dimensions) > 63 or np.min(unit_cell_dimensions) < 53:
         if verbose: print("Lattice unit cell max dimension is not within 5 Angstrom of the expected for Streptavidin. Terminating function and returning input indices.")
-        return indices, None, None
+        return unwrapped_indices, None, None
     
     # Calculate the resolution of the farthest lattice spot from first-pass points
     num_pix = np.max(log_diff_spectrum.shape)
@@ -848,25 +848,58 @@ def mask_image(filename,
 
     # Find spots that exceed the threshold
     indices, amplitudes = find_diffraction_spots_sd(log_diff_spectrum, amplitude_spectrum, num_sd, x_window_fraction, y_window_fraction)
-    
+        
     # If lattice-finding is off, just mask the points and return
-    if not find_lattice:
+    if not look_for_lattice:
         # Replace the diffraction spots
-        masked_fft = replace_diffraction_spots(padded_fft, indices, smoothed_spectrum, replace_angle)
+        masked_fft = replace_diffraction_spots(padded_fft, indices, replace_angle)
         # Perform the inverse FFT
         padded_masked_image = scipy_inverse_fft(masked_fft, verbose, threads)
         # Extract the original image from the padded inverse FFT
         masked_image = unpad_image(padded_masked_image, image.shape)
+        # Return indices, fft, or image if asked
+        if return_spots: 
+            return indices
+        if return_fft: 
+            return masked_fft
+        if return_image: 
+            return masked_image
+        # Else, export the image and return.
         # Export the image as an .mrc file
         export_masked_mrc(masked_image, filename_out, verbose)
         # Print a message to indicate successful masking
         if verbose:
             print(filename + " masked as " + filename_out + " without lattice-finding.")
+        return
+        
     
     # Unwrap indices to help find lattice
     unwrapped_indices = unwrap_indices(indices, log_diff_spectrum)
             
+    # Find the lattice
     basis, highest_resolution, unit_cell_dimensions = find_lattice(unwrapped_indices, amplitudes, pixel_size, log_diff_spectrum, min_lattice_size, epsilon, show_plots, verbose)        
+    
+    if highest_resolution is None:
+        # Replace the diffraction spots
+        masked_fft = replace_diffraction_spots(padded_fft, indices, replace_angle)
+        # Perform the inverse FFT
+        padded_masked_image = scipy_inverse_fft(masked_fft, verbose, threads)
+        # Extract the original image from the padded inverse FFT
+        masked_image = unpad_image(padded_masked_image, image.shape)
+        # Return indices, fft, or image if asked
+        if return_spots: 
+            return indices
+        if return_fft: 
+            return masked_fft
+        if return_image: 
+            return masked_image
+        # Else, export the image and return.
+        # Export the image as an .mrc file
+        export_masked_mrc(masked_image, filename_out, verbose)
+        # Print a message to indicate successful masking
+        if verbose:
+            print(filename + " masked as " + filename_out + " without lattice-finding.")
+        return
     
     # Generate the lattice points along which to search for more peaks
     lattice_indices = generate_lattice_indices(basis, log_diff_spectrum)
@@ -900,18 +933,26 @@ def mask_image(filename,
     padded_masked_image = scipy_inverse_fft(masked_fft, verbose, threads)
     # Extract the original image from the padded inverse FFT
     masked_image = unpad_image(padded_masked_image, image.shape)
+    
+    if return_spots:
+        if mask_along_lattice: return diffraction_indices
+        else: return new_indices
+    if return_stats: 
+        return highest_resolution, unit_cell_dimensions
+    if return_fft: 
+        return masked_fft
+    if return_image: 
+        return masked_image
+    
     # Export the image as an .mrc file
     export_masked_mrc(masked_image, filename_out, verbose)
     # Print a message to indicate successful masking
     if verbose:
         print(filename + " masked as " + filename_out + ".")
+    
+    return
                
-    if return_spots:
-        if mask_along_lattice: return diffraction_indices
-        else: return new_indices
-    if return_stats: return highest_resolution, unit_cell_dimensions
-    if return_fft: return masked_fft
-    if return_image: return masked_image
+    
     
 
 # Functions to handle movies -----------------------------------------------------------------------------------
